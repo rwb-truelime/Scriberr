@@ -85,6 +85,7 @@ export interface WhisperXParams {
     is_multi_track_enabled: boolean;
     api_key?: string;
     max_new_tokens?: number;
+    model_id?: string;
 }
 
 interface TranscriptionConfigDialogProps {
@@ -1138,6 +1139,20 @@ function VoxtralConfig({ params, updateParam }: ConfigProps) {
                 Voxtral does not support word-level timestamps. Synchronized playback, audio seeking, and timestamp-based features won't be available.
             </InfoBanner>
 
+            <Section title="Model Variant">
+                <FormField label="Model" description="Voxtral-mini (3B) is fast, Voxtral-Small (24B) is higher quality but uses ~55GB memory.">
+                    <Select value={params.model_id || "mistralai/Voxtral-mini"} onValueChange={(v) => updateParam('model_id', v)}>
+                        <SelectTrigger className={selectTriggerClassName}>
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className={selectContentClassName}>
+                            <SelectItem value="mistralai/Voxtral-mini" className={selectItemClassName}>Voxtral-mini (3B) — Fast</SelectItem>
+                            <SelectItem value="mistralai/Voxtral-Small-24B-2507" className={selectItemClassName}>Voxtral-Small (24B) — High Quality</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </FormField>
+            </Section>
+
             <Section title="Language Settings">
                 <FormField label="Language" description="Source language for transcription">
                     <Select value={params.language || "en"} onValueChange={(v) => updateParam('language', v)}>
@@ -1164,7 +1179,7 @@ function VoxtralConfig({ params, updateParam }: ConfigProps) {
                             <Input
                                 type="number"
                                 min={1024}
-                                max={16384}
+                                max={32768}
                                 value={params.max_new_tokens || 8192}
                                 onChange={(e) => updateParam('max_new_tokens', parseInt(e.target.value) || 8192)}
                                 className={inputClassName}
