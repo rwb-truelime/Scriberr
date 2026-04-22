@@ -42,6 +42,55 @@ func GetPyTorchCUDAVersion() string {
 func GetPyTorchWheelURL() string {
 	return fmt.Sprintf("https://download.pytorch.org/whl/%s", GetPyTorchCUDAVersion())
 }
+// EnsureCUDATorch checks if the UV-synced environment has CPU-only torch and
+// force-installs the CUDA variant. This is needed because UV's resolver sometimes
+// resolves aarch64 Linux to the CPU torch wheel even with correct markers.
+// This is a no-op on macOS or if CUDA torch is already installed.
+func EnsureCUDATorch(envPath string) error {
+	venvPython := filepath.Join(envPath, ".venv", "bin", "python")
+	if _, err := os.Stat(venvPython); err != nil {
+		return nil // No venv yet, nothing to fix
+	}
+
+	// Check if torch has CUDA support
+	checkCmd := exec.Command(venvPython, "-c", "import torch; print(torch.cuda.is_available())")
+	out, err := checkCmd.CombinedOutput()
+	if err != nil {
+		logger.Warn("Could not check torch CUDA status", "error", err, "output", string(out))
+		return nil // Don't fail the setup over this check
+	}
+
+	if strings.TrimSpace(string(out)) == "True" {
+		logger.Info("Torch CUDA already available, no override needed", "env", envPath)
+		return nil
+	}
+
+	// Check if we even have a GPU (nvidia-smi present)
+	if _, err := exec.LookPath("nvidia-smi"); err != nil {
+		logger.Info("No GPU detected, keeping CPU torch", "env", envPath)
+		return nil
+	}
+
+	// Force-install CUDA torch
+	wheelURL := GetPyTorchWheelURL()
+	logger.Info("Forcing CUDA torch install (UV resolved CPU-only wheel on this platform)",
+		"env", envPath, "wheel_url", wheelURL)
+
+	cmd := exec.Command("uv", "pip", "install",
+		"torch", "torchaudio",
+		"--index-url", wheelURL,
+		"--reinstall",
+		"--python", venvPython,
+	)
+	installOut, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to force-install CUDA torch: %w: %s", err, strings.TrimSpace(string(installOut)))
+	}
+
+	logger.Info("CUDA torch installed successfully", "env", envPath)
+	return nil
+}
+
 
 // CheckEnvironmentReady checks if a UV environment is ready with caching and singleflight
 func CheckEnvironmentReady(envPath, importStatement string) bool {
