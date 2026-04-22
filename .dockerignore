@@ -67,3 +67,6 @@ docker-compose*.yml
 Makefile
 build.sh
 install_*.sh
+
+# Model cache (mounted as volume, not baked into image)
+model-cache
