@@ -131,6 +131,7 @@ type WhisperXParams struct {
 
 	// Voxtral settings
 	MaxNewTokens *int `json:"max_new_tokens,omitempty" gorm:"type:int"`
+	VoxtralModelID *string `json:"model_id,omitempty" gorm:"type:text"`
 }
 
 // BeforeCreate sets the ID if not already set

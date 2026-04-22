@@ -605,6 +605,11 @@ func (u *UnifiedTranscriptionService) convertToVoxtralParams(params models.Whisp
 	}
 
 	// Max new tokens
+	// Model ID (variant selection)
+	if params.VoxtralModelID != nil && *params.VoxtralModelID != "" {
+		paramMap["model_id"] = *params.VoxtralModelID
+	}
+
 	if params.MaxNewTokens != nil {
 		paramMap["max_new_tokens"] = *params.MaxNewTokens
 	}
