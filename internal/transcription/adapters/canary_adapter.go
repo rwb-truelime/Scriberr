@@ -179,6 +179,10 @@ func (c *CanaryAdapter) PrepareEnvironment(ctx context.Context) error {
 		if stat, err := os.Stat(modelPath); err == nil && stat.Size() > 1024*1024 {
 			logger.Info("Canary environment already ready")
 			c.initialized = true
+			// Ensure CUDA torch even for pre-existing environments
+			if err := EnsureCUDATorch(c.envPath); err != nil {
+				logger.Warn("Failed to ensure CUDA torch", "error", err)
+			}
 			return nil
 		}
 	}
@@ -238,6 +242,11 @@ func (c *CanaryAdapter) setupCanaryEnvironment() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("uv sync failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Ensure CUDA torch is installed (UV resolver may pick CPU-only wheel on aarch64)
+	if err := EnsureCUDATorch(c.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch, transcription may use CPU", "error", err)
 	}
 
 	return nil
@@ -340,7 +349,7 @@ func (c *CanaryAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	}
 
 	// Execute Canary
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
@@ -398,7 +407,7 @@ func (c *CanaryAdapter) buildCanaryArgs(input interfaces.AudioInput, params map[
 
 	scriptPath := filepath.Join(c.envPath, "canary_transcribe.py")
 	args := []string{
-		"run", "--native-tls", "--project", c.envPath, "python", scriptPath,
+		filepath.Join(c.envPath, ".venv", "bin", "python"), scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 	}

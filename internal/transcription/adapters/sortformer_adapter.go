@@ -165,6 +165,10 @@ func (s *SortformerAdapter) PrepareEnvironment(ctx context.Context) error {
 			if _, err := os.Stat(scriptPath); err == nil {
 				logger.Info("Sortformer environment already ready")
 				s.initialized = true
+				// Ensure CUDA torch even for pre-existing environments
+				if err := EnsureCUDATorch(s.envPath); err != nil {
+					logger.Warn("Failed to ensure CUDA torch", "error", err)
+				}
 				return nil
 			}
 		}
@@ -222,6 +226,11 @@ func (s *SortformerAdapter) setupSortformerEnvironment() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("uv sync failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Ensure CUDA torch is installed (UV resolver may pick CPU-only wheel on aarch64)
+	if err := EnsureCUDATorch(s.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch, transcription may use CPU", "error", err)
 	}
 
 	return nil
@@ -324,7 +333,7 @@ func (s *SortformerAdapter) Diarize(ctx context.Context, input interfaces.AudioI
 	}
 
 	// Execute Sortformer
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -385,7 +394,7 @@ func (s *SortformerAdapter) buildSortformerArgs(input interfaces.AudioInput, par
 
 	scriptPath := filepath.Join(s.envPath, "sortformer_diarize.py")
 	args := []string{
-		"run", "--native-tls", "--project", s.envPath, "python", scriptPath,
+		filepath.Join(s.envPath, ".venv", "bin", "python"), scriptPath,
 		input.FilePath,
 		outputFile,
 	}
