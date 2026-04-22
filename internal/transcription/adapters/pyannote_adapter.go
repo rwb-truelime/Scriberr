@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -195,6 +196,10 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 			return fmt.Errorf("failed to create diarization script: %w", err)
 		}
 		p.initialized = true
+		// Ensure CUDA torch even for pre-existing environments
+		if err := EnsureCUDATorch(p.envPath); err != nil {
+			logger.Warn("Failed to ensure CUDA torch", "error", err)
+		}
 		return nil
 	}
 
@@ -204,7 +209,7 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 	}
 
 	// Verify PyAnnote is now available
-	testCmd := exec.Command("uv", "run", "--native-tls", "--project", p.envPath, "python", "-c", "from pyannote.audio import Pipeline")
+	testCmd := exec.Command(filepath.Join(p.envPath, ".venv", "bin", "python"), "-c", "from pyannote.audio import Pipeline")
 	if testCmd.Run() != nil {
 		logger.Warn("PyAnnote environment test still failed after setup")
 	}
@@ -235,6 +240,28 @@ func (p *PyAnnoteAdapter) setupPyAnnoteEnvironment() error {
 		1,
 	)
 
+	// On aarch64, fix torchcodec (no aarch64 wheels) and PyTorch CUDA index
+	if runtime.GOARCH == "arm64" {
+		logger.Info("Detected aarch64 platform, patching PyAnnote pyproject.toml")
+
+		// Override torchcodec to only install on x86_64 (no aarch64 wheels exist)
+		if !strings.Contains(contentStr, "override-dependencies") {
+			contentStr = strings.Replace(contentStr,
+				"[tool.uv.sources]",
+				"[tool.uv]\noverride-dependencies = [\n"+
+					"    \"torchcodec>=0.7.0 ; platform_machine == 'x86_64'\",\n"+
+					"    \"triton>=3.4.0 ; platform_machine == 'x86_64'\"\n"+
+					"]\n\n[tool.uv.sources]",
+				1)
+		}
+
+		// Route aarch64 to CUDA PyTorch index instead of CPU-only
+		contentStr = strings.Replace(contentStr,
+			`{ index = "pytorch-cpu", marker = "platform_machine != 'x86_64' and sys_platform != 'darwin'" }`,
+			`{ index = "pytorch", marker = "platform_machine != 'x86_64' and sys_platform != 'darwin'" }`,
+			-1)
+	}
+
 	pyprojectPath := filepath.Join(p.envPath, "pyproject.toml")
 	if err := os.WriteFile(pyprojectPath, []byte(contentStr), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)
@@ -247,6 +274,11 @@ func (p *PyAnnoteAdapter) setupPyAnnoteEnvironment() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("uv sync failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Ensure CUDA torch is installed (UV resolver may pick CPU-only wheel on aarch64)
+	if err := EnsureCUDATorch(p.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch, transcription may use CPU", "error", err)
 	}
 
 	return nil
@@ -315,7 +347,7 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 	}
 
 	// Execute PyAnnote
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -376,7 +408,7 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "pyannote_diarize.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		filepath.Join(p.envPath, ".venv", "bin", "python"), scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 		"--hf-token", p.GetStringParameter(params, "hf_token"),

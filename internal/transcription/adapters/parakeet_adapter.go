@@ -148,6 +148,10 @@ func (p *ParakeetAdapter) PrepareEnvironment(ctx context.Context) error {
 			if scriptErr == nil && bufferedErr == nil {
 				logger.Info("Parakeet environment already ready")
 				p.initialized = true
+				// Ensure CUDA torch even for pre-existing environments
+				if err := EnsureCUDATorch(p.envPath); err != nil {
+					logger.Warn("Failed to ensure CUDA torch", "error", err)
+				}
 				return nil
 			}
 			logger.Info("Parakeet model exists but scripts missing, recreating scripts")
@@ -206,6 +210,11 @@ func (p *ParakeetAdapter) setupParakeetEnvironment() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("uv sync failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Ensure CUDA torch is installed (UV resolver may pick CPU-only wheel on aarch64)
+	if err := EnsureCUDATorch(p.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch, transcription may use CPU", "error", err)
 	}
 
 	return nil
@@ -384,7 +393,7 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 	}
 
 	// Execute Parakeet
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -433,7 +442,7 @@ func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfac
 	}
 
 	// Execute buffered inference
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -479,7 +488,7 @@ func (p *ParakeetAdapter) buildParakeetArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "parakeet_transcribe.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		filepath.Join(p.envPath, ".venv", "bin", "python"), scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 	}
@@ -595,7 +604,7 @@ func (p *ParakeetAdapter) buildBufferedArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "parakeet_transcribe_buffered.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		filepath.Join(p.envPath, ".venv", "bin", "python"), scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 		"--chunk-len", chunkDuration,

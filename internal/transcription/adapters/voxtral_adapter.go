@@ -61,6 +61,17 @@ func NewVoxtralAdapter(envPath string) *VoxtralAdapter {
 	}
 
 	schema := []interfaces.ParameterSchema{
+		// Model selection
+		{
+			Name:        "model_id",
+			Type:        "string",
+			Required:    false,
+			Default:     "mistralai/Voxtral-mini",
+			Options:     []string{"mistralai/Voxtral-mini", "mistralai/Voxtral-Small-24B-2507"},
+			Description: "Voxtral model variant (mini=3B fast, small=24B higher quality)",
+			Group:       "basic",
+		},
+
 		// Language selection
 		{
 			Name:     "language",
@@ -85,7 +96,7 @@ func NewVoxtralAdapter(envPath string) *VoxtralAdapter {
 			Required:    false,
 			Default:     8192,
 			Min:         &[]float64{1024}[0],
-			Max:         &[]float64{16384}[0],
+			Max:         &[]float64{32768}[0],
 			Description: "Maximum number of tokens to generate (Voxtral has 32k context window)",
 			Group:       "advanced",
 		},
@@ -103,7 +114,7 @@ func NewVoxtralAdapter(envPath string) *VoxtralAdapter {
 
 // GetSupportedModels returns the available Voxtral models
 func (v *VoxtralAdapter) GetSupportedModels() []string {
-	return []string{"mistralai/Voxtral-mini"}
+	return []string{"mistralai/Voxtral-mini", "mistralai/Voxtral-Small-24B-2507"}
 }
 
 // PrepareEnvironment sets up the Voxtral environment
@@ -120,7 +131,11 @@ func (v *VoxtralAdapter) PrepareEnvironment(ctx context.Context) error {
 		CheckEnvironmentReady(v.envPath, "import mistral_common") {
 		logger.Info("Voxtral environment already ready")
 		v.initialized = true
-		return nil
+		// Ensure CUDA torch even for pre-existing environments
+	if err := EnsureCUDATorch(v.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch", "error", err)
+	}
+	return nil
 	}
 
 	// Setup environment
@@ -165,6 +180,11 @@ func (v *VoxtralAdapter) setupVoxtralEnvironment() error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("uv sync failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// Ensure CUDA torch is installed (UV resolver may pick CPU-only wheel on aarch64)
+	if err := EnsureCUDATorch(v.envPath); err != nil {
+		logger.Warn("Failed to ensure CUDA torch, transcription may use CPU", "error", err)
 	}
 
 	return nil
@@ -234,7 +254,7 @@ func (v *VoxtralAdapter) Transcribe(ctx context.Context, input interfaces.AudioI
 	}
 
 	// Execute Voxtral
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -272,7 +292,11 @@ func (v *VoxtralAdapter) Transcribe(ctx context.Context, input interfaces.AudioI
 	}
 
 	result.ProcessingTime = time.Since(startTime)
-	result.ModelUsed = "mistralai/Voxtral-mini"
+	modelID := v.GetStringParameter(params, "model_id")
+	if modelID == "" {
+		modelID = "mistralai/Voxtral-mini"
+	}
+	result.ModelUsed = modelID
 
 	logger.Info("Voxtral transcription completed",
 		"text_length", len(result.Text),
@@ -297,8 +321,11 @@ func (v *VoxtralAdapter) buildVoxtralArgs(input interfaces.AudioInput, params ma
 		scriptPath = filepath.Join(v.envPath, "voxtral_transcribe.py")
 	}
 
+	// Use venv Python directly instead of "uv run" to avoid UV's lock resolver
+	// reverting CUDA torch to CPU on aarch64 platforms
+	venvPython := filepath.Join(v.envPath, ".venv", "bin", "python")
 	args := []string{
-		"run", "--native-tls", "--project", v.envPath, "python", scriptPath,
+		venvPython, scriptPath,
 		input.FilePath,
 		outputFile,
 	}
@@ -306,6 +333,11 @@ func (v *VoxtralAdapter) buildVoxtralArgs(input interfaces.AudioInput, params ma
 	// Add language
 	if language := v.GetStringParameter(params, "language"); language != "" && language != "auto" {
 		args = append(args, "--language", language)
+	}
+
+	// Add model ID
+	if modelID := v.GetStringParameter(params, "model_id"); modelID != "" && modelID != "mistralai/Voxtral-mini" {
+		args = append(args, "--model-id", modelID)
 	}
 
 	// Device auto-detection (like Parakeet/Canary) - no device parameter needed
