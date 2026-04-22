@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -300,6 +301,16 @@ func (w *WhisperXAdapter) PrepareEnvironment(ctx context.Context) error {
 	// Check if WhisperX is already set up and working (using cache to speed up repeated checks)
 	if CheckEnvironmentReady(whisperxPath, "import whisperx") {
 		logger.Info("WhisperX environment already ready")
+
+		// On aarch64, always ensure the CUDA ctranslate2 wheel is installed.
+		// The CPU-only wheel from PyPI may have been restored by a uv sync, or
+		// the venv may have been re-created from the lockfile on a restart.
+		if runtime.GOARCH == "arm64" {
+			if err := w.installCUDActranslate2(whisperxPath); err != nil {
+				logger.Warn("Failed to install CUDA ctranslate2 on existing venv, falling back to CPU-only", "error", err)
+			}
+		}
+
 		w.initialized = true
 		return nil
 	}
@@ -324,8 +335,68 @@ func (w *WhisperXAdapter) PrepareEnvironment(ctx context.Context) error {
 		return fmt.Errorf("failed to sync WhisperX: %w", err)
 	}
 
+	// On aarch64, replace the CPU-only ctranslate2 with the CUDA-enabled build
+	// that was compiled during the Docker image build
+	if runtime.GOARCH == "arm64" {
+		if err := w.installCUDActranslate2(whisperxPath); err != nil {
+			logger.Warn("Failed to install CUDA ctranslate2, falling back to CPU-only", "error", err)
+		}
+	}
+
 	w.initialized = true
 	logger.Info("WhisperX environment prepared successfully")
+	return nil
+}
+
+// installCUDActranslate2 replaces the CPU-only ctranslate2 with a CUDA-enabled build.
+// On aarch64, PyPI only provides CPU wheels for ctranslate2. The Dockerfile builds
+// ctranslate2 from source with CUDA support and places the wheel in /app/ctranslate2-cuda/.
+func (w *WhisperXAdapter) installCUDActranslate2(whisperxPath string) error {
+	wheelDir := "/app/ctranslate2-cuda"
+
+	// Check if pre-built CUDA wheel exists
+	entries, err := os.ReadDir(wheelDir)
+	if err != nil {
+		return fmt.Errorf("CUDA ctranslate2 wheel directory not found: %w", err)
+	}
+
+	var wheelFile string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".whl") && strings.Contains(entry.Name(), "ctranslate2") {
+			wheelFile = filepath.Join(wheelDir, entry.Name())
+			break
+		}
+	}
+
+	if wheelFile == "" {
+		return fmt.Errorf("no ctranslate2 wheel found in %s", wheelDir)
+	}
+
+	logger.Info("Installing CUDA-enabled ctranslate2", "wheel", wheelFile)
+
+	// Use uv pip install to replace the CPU wheel with the CUDA one
+	cmd := exec.Command("uv", "pip", "install", "--reinstall", "--no-deps", "--native-tls",
+		"--python", filepath.Join(whisperxPath, ".venv", "bin", "python3"),
+		wheelFile)
+	cmd.Dir = whisperxPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to install CUDA ctranslate2: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	logger.Info("CUDA ctranslate2 installed successfully")
+
+	// Verify CUDA support - use venv python directly to avoid uv run re-syncing the lockfile
+	// (which would overwrite our CUDA wheel with the CPU version from PyPI)
+	verifyCmd := exec.Command(filepath.Join(whisperxPath, ".venv", "bin", "python"),
+		"-c", "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count())")
+	verifyOut, err := verifyCmd.CombinedOutput()
+	if err != nil {
+		logger.Warn("ctranslate2 CUDA verification failed", "output", string(verifyOut), "error", err)
+	} else {
+		logger.Info("ctranslate2 CUDA verification", "output", strings.TrimSpace(string(verifyOut)))
+	}
+
 	return nil
 }
 
@@ -350,25 +421,109 @@ func (w *WhisperXAdapter) updateWhisperXDependencies(whisperxPath string) error 
 	}
 
 	content := string(data)
-	content = strings.ReplaceAll(content, "ctranslate2<4.5.0", "ctranslate2==4.6.0")
+	content = strings.ReplaceAll(content, "ctranslate2<4.5.0", "ctranslate2>=4.5.0")
 
 	if !strings.Contains(content, "yt-dlp") {
 		content = strings.ReplaceAll(content,
 			`"transformers>=4.48.0",`,
-			`"transformers>=4.48.0",
-    "yt-dlp[default]",`)
+			"\"transformers>=4.48.0\",\n    \"yt-dlp[default]\",")
 	}
 
 	// Set PyTorch CUDA version based on environment configuration
-	// The repo already has the correct [tool.uv.sources] configuration, we just need to update the CUDA version
-	// This allows using cu126 for legacy GPUs (GTX 10-series through RTX 40-series) or cu128 for Blackwell (RTX 50-series)
 	content = strings.ReplaceAll(content, "https://download.pytorch.org/whl/cu128", GetPyTorchWheelURL())
+
+	// On aarch64 (e.g. NVIDIA GB10/GH200), the upstream WhisperX pyproject.toml routes
+	// non-x86_64 platforms to pytorch-cpu. We need to fix this so aarch64 uses the CUDA
+	// PyTorch index, since CUDA wheels for aarch64 are available at the cu129 index.
+	if runtime.GOARCH == "arm64" {
+		logger.Info("Detected aarch64 platform, configuring PyTorch CUDA index for ARM")
+		content = w.fixAarch64PyTorchSources(content)
+
+		// triton is a transitive dependency of torch but has no aarch64 wheels.
+		// Override it to only resolve/install on x86_64 Linux.
+		overrideIdx := strings.Index(content, "override-dependencies")
+		if overrideIdx >= 0 {
+			overrideEnd := strings.Index(content[overrideIdx:], "]")
+			if overrideEnd >= 0 {
+				overrideSection := content[overrideIdx : overrideIdx+overrideEnd]
+				if !strings.Contains(overrideSection, "triton") {
+					logger.Info("Adding triton to override-dependencies for aarch64 (no aarch64 wheels)")
+					tritonLine := "\n    \"triton>=3.0.0; sys_platform == 'linux' and platform_machine == 'x86_64'\","
+					// Insert triton override after the opening bracket
+					openBracket := strings.Index(content[overrideIdx:], "[")
+					if openBracket >= 0 {
+						insertPos := overrideIdx + openBracket + 1
+						content = content[:insertPos] + tritonLine + content[insertPos:]
+					}
+				}
+			}
+		}
+	}
 
 	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)
 	}
 
 	return nil
+}
+
+// fixAarch64PyTorchSources rewrites the [tool.uv.sources] section so that aarch64
+// uses the CUDA PyTorch index instead of the CPU-only index.
+// The upstream WhisperX routes platform_machine != 'x86_64' to pytorch-cpu,
+// but NVIDIA provides CUDA-enabled PyTorch wheels for aarch64 at the cu129 index.
+func (w *WhisperXAdapter) fixAarch64PyTorchSources(content string) string {
+	cudaVersion := GetPyTorchCUDAVersion()
+	wheelURL := GetPyTorchWheelURL()
+
+	// Replace the uv sources section to route aarch64 to the CUDA index
+	// Original routes non-x86_64 to pytorch-cpu; we want aarch64 Linux to use CUDA
+	oldSources := `[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch-cpu", marker = "platform_machine != 'x86_64' and sys_platform != 'darwin'" },
+  { index = "pytorch", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch-cpu", marker = "platform_machine != 'x86_64' and sys_platform != 'darwin'" },
+  { index = "pytorch", marker = "platform_machine == 'x86_64' and sys_platform != 'darwin'" },
+]
+triton = [
+  { index = "pytorch", marker = "sys_platform == 'linux'" },
+]`
+
+	newSources := `[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch", marker = "sys_platform != 'darwin'" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch", marker = "sys_platform != 'darwin'" },
+]
+torchvision = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+  { index = "pytorch", marker = "sys_platform != 'darwin'" },
+]
+triton = [
+  { index = "pytorch", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]`
+
+	if strings.Contains(content, oldSources) {
+		content = strings.Replace(content, oldSources, newSources, 1)
+	} else {
+		logger.Warn("Could not find expected [tool.uv.sources] section, attempting line-by-line fix")
+		// Fallback: replace the specific pytorch-cpu markers for non-x86_64
+		content = strings.ReplaceAll(content,
+			`{ index = "pytorch-cpu", marker = "platform_machine != 'x86_64' and sys_platform != 'darwin'" }`,
+			`{ index = "pytorch", marker = "sys_platform != 'darwin'" }`)
+	}
+
+	// Ensure the pytorch index URL uses the right CUDA version
+	// For aarch64, PyTorch 2.8.0 CUDA wheels are on the cu129 index
+	logger.Info("Setting PyTorch wheel URL", "url", wheelURL, "cuda_version", cudaVersion)
+
+	return content
 }
 
 // uvSyncWhisperX runs uv sync for WhisperX
@@ -405,6 +560,13 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
+	// Ensure tempDir is absolute so it resolves correctly when cmd.Dir is set
+	// to the WhisperX directory (venv python runs from there, not /app)
+	if !filepath.IsAbs(tempDir) {
+		if absTempDir, absErr := filepath.Abs(tempDir); absErr == nil {
+			tempDir = absTempDir
+		}
+	}
 	defer w.CleanupTempDirectory(tempDir)
 
 	// Build WhisperX command
@@ -413,8 +575,12 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 		return nil, fmt.Errorf("failed to build command: %w", err)
 	}
 
-	// Execute WhisperX
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	// Execute WhisperX using the venv python directly to avoid uv run re-syncing
+	// the environment (which would overwrite the CUDA ctranslate2 with a CPU version)
+	whisperxPath := filepath.Join(w.envPath, "WhisperX")
+	venvPython := filepath.Join(whisperxPath, ".venv", "bin", "python")
+	cmd := exec.CommandContext(ctx, venvPython, args...)
+	cmd.Dir = whisperxPath
 
 	// Add nvidia libraries to LD_LIBRARY_PATH
 	env := os.Environ()
@@ -490,10 +656,8 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 
 // buildWhisperXArgs builds the command arguments for WhisperX
 func (w *WhisperXAdapter) buildWhisperXArgs(input interfaces.AudioInput, params map[string]interface{}, outputDir string) ([]string, error) {
-	whisperxPath := filepath.Join(w.envPath, "WhisperX")
-
 	args := []string{
-		"run", "--native-tls", "--project", whisperxPath, "python", "-m", "whisperx",
+		"-m", "whisperx",
 		input.FilePath,
 		"--output_dir", outputDir,
 	}
