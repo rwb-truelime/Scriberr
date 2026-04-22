@@ -7,8 +7,6 @@ PGID=${PGID:-1000}
 
 echo "=== Scriberr Container Setup ==="
 echo "Requested UID: $PUID, GID: $PGID"
-# export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
-# echo "LD_LIBRARY_PATH is: $LD_LIBRARY_PATH"
 
 # Function to setup user if needed
 setup_user() {
@@ -51,6 +49,15 @@ if [ "$(id -u)" = "0" ]; then
     echo "Setting up data directories..."
     mkdir -p /app/data/uploads /app/data/transcripts /app/whisperx-env
     chown -R "$PUID:$PGID" /app/data /app/whisperx-env
+
+    # Only chown model cache if ownership doesn't match (avoids slow recursive chown on 21GB)
+    if [ -d /home/appuser/.cache ]; then
+        cache_owner=$(stat -c '%u' /home/appuser/.cache 2>/dev/null || echo "0")
+        if [ "$cache_owner" != "$PUID" ]; then
+            echo "Updating model cache ownership to $PUID:$PGID (this may take a moment)..."
+            chown -R "$PUID:$PGID" /home/appuser/.cache
+        fi
+    fi
 
     echo "=== Setup Complete ==="
     echo "Switching to user appuser (UID=$PUID, GID=$PGID) and starting application..."
