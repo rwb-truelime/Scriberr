@@ -614,6 +614,34 @@ func (u *UnifiedTranscriptionService) convertToVoxtralParams(params models.Whisp
 		paramMap["max_new_tokens"] = *params.MaxNewTokens
 	}
 
+	if params.VoxtralTemperature != nil {
+		paramMap["temperature"] = *params.VoxtralTemperature
+	}
+
+	if params.VoxtralDoSample != nil {
+		paramMap["do_sample"] = *params.VoxtralDoSample
+	}
+
+	if params.VoxtralRepPenalty != nil {
+		paramMap["repetition_penalty"] = *params.VoxtralRepPenalty
+	}
+
+	if params.VoxtralNumBeams != nil {
+		paramMap["num_beams"] = *params.VoxtralNumBeams
+	}
+
+	if params.VoxtralTopP != nil {
+		paramMap["top_p"] = *params.VoxtralTopP
+	}
+
+	if params.VoxtralTopK != nil {
+		paramMap["top_k"] = *params.VoxtralTopK
+	}
+
+	if params.VoxtralNoRepeatNgram != nil {
+		paramMap["no_repeat_ngram_size"] = *params.VoxtralNoRepeatNgram
+	}
+
 	return paramMap
 }
 

@@ -348,6 +348,37 @@ func (v *VoxtralAdapter) buildVoxtralArgs(input interfaces.AudioInput, params ma
 		args = append(args, "--max-new-tokens", fmt.Sprintf("%d", maxTokens))
 	}
 
+	// Generation parameters for hallucination control
+	if temp, ok := params["temperature"]; ok {
+		args = append(args, "--temperature", fmt.Sprintf("%v", temp))
+	}
+
+	if doSample, ok := params["do_sample"]; ok {
+		if doSample.(bool) {
+			args = append(args, "--do-sample")
+		}
+	}
+
+	if repPenalty, ok := params["repetition_penalty"]; ok {
+		args = append(args, "--repetition-penalty", fmt.Sprintf("%v", repPenalty))
+	}
+
+	if numBeams, ok := params["num_beams"]; ok {
+		args = append(args, "--num-beams", fmt.Sprintf("%v", numBeams))
+	}
+
+	if topP, ok := params["top_p"]; ok {
+		args = append(args, "--top-p", fmt.Sprintf("%v", topP))
+	}
+
+	if topK, ok := params["top_k"]; ok {
+		args = append(args, "--top-k", fmt.Sprintf("%v", topK))
+	}
+
+	if noRepeat, ok := params["no_repeat_ngram_size"]; ok {
+		args = append(args, "--no-repeat-ngram-size", fmt.Sprintf("%v", noRepeat))
+	}
+
 	// Add chunk length for buffered mode (default: 25 minutes = 1500 seconds)
 	if useBuffered {
 		args = append(args, "--chunk-len", "1500")
