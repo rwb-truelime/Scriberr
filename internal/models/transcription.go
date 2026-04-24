@@ -130,8 +130,15 @@ type WhisperXParams struct {
 	APIKey *string `json:"api_key,omitempty" gorm:"type:text"`
 
 	// Voxtral settings
-	MaxNewTokens *int `json:"max_new_tokens,omitempty" gorm:"type:int"`
-	VoxtralModelID *string `json:"model_id,omitempty" gorm:"type:text"`
+	MaxNewTokens         *int     `json:"max_new_tokens,omitempty" gorm:"type:int"`
+	VoxtralModelID       *string  `json:"model_id,omitempty" gorm:"type:text"`
+	VoxtralTemperature   *float64 `json:"voxtral_temperature,omitempty" gorm:"type:real"`
+	VoxtralDoSample      *bool    `json:"voxtral_do_sample,omitempty" gorm:"type:boolean"`
+	VoxtralRepPenalty    *float64 `json:"voxtral_repetition_penalty,omitempty" gorm:"type:real"`
+	VoxtralNumBeams      *int     `json:"voxtral_num_beams,omitempty" gorm:"type:int"`
+	VoxtralTopP          *float64 `json:"voxtral_top_p,omitempty" gorm:"type:real"`
+	VoxtralTopK          *int     `json:"voxtral_top_k,omitempty" gorm:"type:int"`
+	VoxtralNoRepeatNgram *int     `json:"voxtral_no_repeat_ngram_size,omitempty" gorm:"type:int"`
 }
 
 // BeforeCreate sets the ID if not already set

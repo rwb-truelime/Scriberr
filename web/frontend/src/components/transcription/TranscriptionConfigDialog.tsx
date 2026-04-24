@@ -86,6 +86,13 @@ export interface WhisperXParams {
     api_key?: string;
     max_new_tokens?: number;
     model_id?: string;
+    voxtral_temperature?: number;           // Voxtral generation temperature (0=greedy)
+    voxtral_do_sample?: boolean;            // Voxtral enable sampling
+    voxtral_repetition_penalty?: number;    // Voxtral repetition penalty
+    voxtral_num_beams?: number;             // Voxtral beam search width
+    voxtral_top_p?: number;                 // Voxtral nucleus sampling
+    voxtral_top_k?: number;                 // Voxtral top-k sampling
+    voxtral_no_repeat_ngram_size?: number;  // Voxtral no-repeat ngram
 }
 
 interface TranscriptionConfigDialogProps {
@@ -1185,6 +1192,69 @@ function VoxtralConfig({ params, updateParam }: ConfigProps) {
                                 className={inputClassName}
                             />
                         </FormField>
+
+                        <FormField label="Temperature" description="0 = greedy (most deterministic). Higher values increase randomness. Keep at 0 for best transcription accuracy.">
+                            <Input
+                                type="number" min={0} max={2} step={0.1}
+                                value={params.voxtral_temperature ?? 0}
+                                onChange={(e) => updateParam('voxtral_temperature', parseFloat(e.target.value) || 0)}
+                            />
+                        </FormField>
+
+                        <FormField label="Repetition Penalty" description="Penalizes repeated tokens. 1.0 = no penalty. 1.05-1.2 helps prevent hallucinated loops.">
+                            <Input
+                                type="number" min={1.0} max={2.0} step={0.05}
+                                value={params.voxtral_repetition_penalty ?? 1.0}
+                                onChange={(e) => updateParam('voxtral_repetition_penalty', parseFloat(e.target.value) || 1.0)}
+                            />
+                        </FormField>
+
+                        <FormField label="Beam Search Width" description="Number of beams for beam search. 1 = greedy. 5 = good quality. Higher = slower but more accurate.">
+                            <Input
+                                type="number" min={1} max={10} step={1}
+                                value={params.voxtral_num_beams ?? 1}
+                                onChange={(e) => updateParam('voxtral_num_beams', parseInt(e.target.value) || 1)}
+                            />
+                        </FormField>
+
+                        <FormField label="No-Repeat N-gram Size" description="Blocks repeating n-grams of this size. 4 = prevents 4-word phrase repetition. 0 = disabled.">
+                            <Input
+                                type="number" min={0} max={10} step={1}
+                                value={params.voxtral_no_repeat_ngram_size ?? 0}
+                                onChange={(e) => updateParam('voxtral_no_repeat_ngram_size', parseInt(e.target.value) || 0)}
+                            />
+                        </FormField>
+
+                        <div className="flex items-center justify-between">
+                            <FormField label="Enable Sampling" description="When enabled, uses temperature/top-p/top-k instead of greedy decoding.">
+                                <input
+                                    type="checkbox"
+                                    checked={params.voxtral_do_sample ?? false}
+                                    onChange={(e) => updateParam('voxtral_do_sample', e.target.checked)}
+                                    className="h-4 w-4 rounded border-gray-300"
+                                />
+                            </FormField>
+                        </div>
+
+                        {params.voxtral_do_sample && (
+                            <>
+                                <FormField label="Top-P (Nucleus Sampling)" description="Cumulative probability cutoff. 0.9 = consider tokens covering 90% probability mass.">
+                                    <Input
+                                        type="number" min={0} max={1} step={0.05}
+                                        value={params.voxtral_top_p ?? 0.9}
+                                        onChange={(e) => updateParam('voxtral_top_p', parseFloat(e.target.value) || 0.9)}
+                                    />
+                                </FormField>
+
+                                <FormField label="Top-K" description="Only consider top K most probable tokens. Lower = more focused.">
+                                    <Input
+                                        type="number" min={1} max={100} step={1}
+                                        value={params.voxtral_top_k ?? 50}
+                                        onChange={(e) => updateParam('voxtral_top_k', parseInt(e.target.value) || 50)}
+                                    />
+                                </FormField>
+                            </>
+                        )}
                     </AccordionContent>
                 </AccordionItem>
             </Accordion>

@@ -19,6 +19,13 @@ def transcribe_audio(
     model_id: str = "mistralai/Voxtral-mini",
     device: str = "auto",
     max_new_tokens: int = 8192,
+    temperature: float = 0.0,
+    do_sample: bool = False,
+    repetition_penalty: float = 1.0,
+    num_beams: int = 1,
+    top_p: float = 1.0,
+    top_k: int = 50,
+    no_repeat_ngram_size: int = 0,
 ) -> dict:
     """
     Transcribe audio using Voxtral-mini model.
@@ -66,11 +73,32 @@ def transcribe_audio(
 
     print(f"Generating transcription...", file=sys.stderr)
 
+    # Build generation kwargs
+    gen_kwargs = {
+        "max_new_tokens": max_new_tokens,
+    }
+    if temperature > 0:
+        gen_kwargs["temperature"] = temperature
+    if do_sample:
+        gen_kwargs["do_sample"] = True
+        if top_p < 1.0:
+            gen_kwargs["top_p"] = top_p
+        if top_k > 0:
+            gen_kwargs["top_k"] = top_k
+    if repetition_penalty != 1.0:
+        gen_kwargs["repetition_penalty"] = repetition_penalty
+    if num_beams > 1:
+        gen_kwargs["num_beams"] = num_beams
+    if no_repeat_ngram_size > 0:
+        gen_kwargs["no_repeat_ngram_size"] = no_repeat_ngram_size
+
+    print(f"Generation params: {gen_kwargs}", file=sys.stderr)
+
     # Generate transcription
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=max_new_tokens,
+            **gen_kwargs,
         )
 
     # Decode only the newly generated tokens (skip the input prompt)
@@ -138,6 +166,13 @@ def main():
         default=8192,
         help="Maximum number of tokens to generate (default: 8192)",
     )
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0=greedy)")
+    parser.add_argument("--do-sample", action="store_true", help="Enable sampling")
+    parser.add_argument("--repetition-penalty", type=float, default=1.0, help="Repetition penalty (1.0=none)")
+    parser.add_argument("--num-beams", type=int, default=1, help="Beam search width")
+    parser.add_argument("--top-p", type=float, default=1.0, help="Nucleus sampling cutoff")
+    parser.add_argument("--top-k", type=int, default=50, help="Top-k sampling")
+    parser.add_argument("--no-repeat-ngram-size", type=int, default=0, help="Block repeating n-grams of this size")
 
     args = parser.parse_args()
 
@@ -149,6 +184,13 @@ def main():
             model_id=args.model_id,
             device=args.device,
             max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            do_sample=args.do_sample,
+            repetition_penalty=args.repetition_penalty,
+            num_beams=args.num_beams,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            no_repeat_ngram_size=args.no_repeat_ngram_size,
         )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
