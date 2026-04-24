@@ -26,12 +26,14 @@ services:
       - PUID=${PUID:-10001}
       - PGID=${PGID:-10001}
       - APP_ENV=production
+      - QUEUE_WORKERS=1
+      - QUEUE_AUTO_SCALE=false
       - HF_TOKEN=${HF_TOKEN}
     volumes:
       - scriberr_scriberr_data:/app/data
       - scriberr_scriberr_models:/app/whisperx-env
       - scriberr_model_cache:/home/appuser/.cache
-    restart: unless-stopped
+    restart: "no"
 
 networks:
   caddy-proxy:

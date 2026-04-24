@@ -53,17 +53,22 @@ func EnsureCUDATorch(envPath string) error {
 	}
 
 	// Check if torch has CUDA support
+	// If torch import fails (corrupted install, missing .so files), treat as needing reinstall
 	checkCmd := exec.Command(venvPython, "-c", "import torch; print(torch.cuda.is_available())")
 	out, err := checkCmd.CombinedOutput()
+	needsReinstall := false
 	if err != nil {
-		logger.Warn("Could not check torch CUDA status", "error", err, "output", string(out))
-		return nil // Don't fail the setup over this check
-	}
-
-	if strings.TrimSpace(string(out)) == "True" {
+		logger.Warn("Torch import failed (likely corrupted install), will reinstall",
+			"error", err, "output", string(out), "env", envPath)
+		needsReinstall = true
+	} else if strings.TrimSpace(string(out)) == "True" {
 		logger.Info("Torch CUDA already available, no override needed", "env", envPath)
 		return nil
+	} else {
+		needsReinstall = true
 	}
+
+	_ = needsReinstall // proceed to GPU check and reinstall
 
 	// Check if we even have a GPU (nvidia-smi present)
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
