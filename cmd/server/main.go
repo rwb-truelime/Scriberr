@@ -136,7 +136,7 @@ func main() {
 
 	// Initialize task queue
 	logger.Startup("queue", "Starting background processing")
-	taskQueue := queue.NewTaskQueue(0, unifiedProcessor, jobRepo) // Use QUEUE_WORKERS env var
+	taskQueue := queue.NewTaskQueue(2, unifiedProcessor, jobRepo) // QUEUE_WORKERS overrides this default
 	taskQueue.Start()
 	defer taskQueue.Stop()
 
