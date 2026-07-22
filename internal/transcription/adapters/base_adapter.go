@@ -22,9 +22,10 @@ import (
 
 // Environment readiness cache to avoid repeated expensive UV checks
 var (
-	envCacheMutex sync.RWMutex
-	envCache      = make(map[string]bool)
-	requestGroup  singleflight.Group
+	envCacheMutex        sync.RWMutex
+	envCache             = make(map[string]bool)
+	requestGroup         singleflight.Group
+	cudaTorchRepairLocks sync.Map // map[string]*sync.Mutex
 )
 
 // GetPyTorchCUDAVersion returns the PyTorch CUDA wheel version to use.
@@ -69,23 +70,19 @@ func EnsureCUDATorch(envPath string) error {
 		return nil // No venv yet, nothing to fix
 	}
 
-	// Check if torch has CUDA support
-	// If torch import fails (corrupted install, missing .so files), treat as needing reinstall
-	checkCmd := exec.Command(venvPython, "-c", "import torch; print(torch.cuda.is_available())")
-	out, err := checkCmd.CombinedOutput()
-	needsReinstall := false
-	if err != nil {
-		logger.Warn("Torch import failed (likely corrupted install), will reinstall",
-			"error", err, "output", string(out), "env", envPath)
-		needsReinstall = true
-	} else if strings.TrimSpace(string(out)) == "True" {
-		logger.Info("Torch CUDA already available, no override needed", "env", envPath)
+	if cudaTorchAvailable(venvPython, envPath) {
 		return nil
-	} else {
-		needsReinstall = true
 	}
 
-	_ = needsReinstall // proceed to GPU check and reinstall
+	lock, _ := cudaTorchRepairLocks.LoadOrStore(envPath, &sync.Mutex{})
+	repairLock := lock.(*sync.Mutex)
+	repairLock.Lock()
+	defer repairLock.Unlock()
+
+	// Another caller may have repaired this environment while this call waited.
+	if cudaTorchAvailable(venvPython, envPath) {
+		return nil
+	}
 
 	// Check if we even have a GPU (nvidia-smi present)
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
@@ -111,6 +108,22 @@ func EnsureCUDATorch(envPath string) error {
 
 	logger.Info("CUDA torch installed successfully", "env", envPath)
 	return nil
+}
+
+func cudaTorchAvailable(venvPython, envPath string) bool {
+	checkCmd := exec.Command(venvPython, "-c", "import torch; print(torch.cuda.is_available())")
+	out, err := checkCmd.CombinedOutput()
+	if err != nil {
+		logger.Warn("Torch import failed (likely corrupted install), will reinstall",
+			"error", err, "output", string(out), "env", envPath)
+		return false
+	}
+	if strings.TrimSpace(string(out)) != "True" {
+		return false
+	}
+
+	logger.Info("Torch CUDA already available, no override needed", "env", envPath)
+	return true
 }
 
 // CheckEnvironmentReady checks if a UV environment is ready with caching and singleflight
