@@ -360,7 +360,7 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing PyAnnote command", "args", strings.Join(args, " "))
+	logger.Info("Executing PyAnnote command", "args", RedactedCommandArgs(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {

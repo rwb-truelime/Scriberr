@@ -42,6 +42,23 @@ func GetPyTorchCUDAVersion() string {
 func GetPyTorchWheelURL() string {
 	return fmt.Sprintf("https://download.pytorch.org/whl/%s", GetPyTorchCUDAVersion())
 }
+
+// RedactedCommandArgs formats command arguments for logs without exposing Hugging Face tokens.
+func RedactedCommandArgs(args []string) string {
+	redacted := append([]string(nil), args...)
+
+	for i, arg := range redacted {
+		switch arg {
+		case "--hf_token", "--hf-token":
+			if i+1 < len(redacted) {
+				redacted[i+1] = "******"
+			}
+		}
+	}
+
+	return strings.Join(redacted, " ")
+}
+
 // EnsureCUDATorch checks if the UV-synced environment has CPU-only torch and
 // force-installs the CUDA variant. This is needed because UV's resolver sometimes
 // resolves aarch64 Linux to the CPU torch wheel even with correct markers.
@@ -95,7 +112,6 @@ func EnsureCUDATorch(envPath string) error {
 	logger.Info("CUDA torch installed successfully", "env", envPath)
 	return nil
 }
-
 
 // CheckEnvironmentReady checks if a UV environment is ready with caching and singleflight
 func CheckEnvironmentReady(envPath, importStatement string) bool {
