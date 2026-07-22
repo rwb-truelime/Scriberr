@@ -692,17 +692,16 @@ function VoxtralConfig({ params, updateParam }: ConfigProps) {
             </InfoBanner>
 
             <Section title="Model Variant">
-                <FormField label="Model" description="Voxtral-mini (3B) is fast, Voxtral-Small (24B) is higher quality but uses ~55GB memory.">
-                    <Select value={params.model_id || "mistralai/Voxtral-mini"} onValueChange={(v) => updateParam('model_id', v)}>
-                        <SelectTrigger className={selectTriggerClassName}>
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className={selectContentClassName}>
-                            <SelectItem value="mistralai/Voxtral-mini" className={selectItemClassName}>Voxtral-mini (3B) — Fast</SelectItem>
-                            <SelectItem value="mistralai/Voxtral-Small-24B-2507" className={selectItemClassName}>Voxtral-Small (24B) — High Quality</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </FormField>
+                <SelectField
+                    label="Model"
+                    description="Voxtral-mini (3B) is fast, Voxtral-Small (24B) is higher quality but uses ~55GB memory."
+                    value={params.model_id || "mistralai/Voxtral-mini"}
+                    onValueChange={(v) => updateParam('model_id', v)}
+                    options={[
+                        { value: "mistralai/Voxtral-mini", label: "Voxtral-mini (3B) — Fast" },
+                        { value: "mistralai/Voxtral-Small-24B-2507", label: "Voxtral-Small (24B) — High Quality" },
+                    ]}
+                />
             </Section>
 
             <Section title="Language Settings">
